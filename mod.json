@@ -4,6 +4,7 @@
   "name": "Online Music Source",
   "version": "1.0.0",
   "author": "wumeng114514",
+  "contributors": ["Claude AI"],
   "description": "在线音源适配器，支持多平台搜索和播放",
   "preview": "preview.png",
   "main": "main.cjs",
