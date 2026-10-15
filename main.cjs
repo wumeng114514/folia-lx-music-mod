@@ -8,6 +8,7 @@ const crypto = require('crypto');
 const zlib = require('zlib');
 
 const DEFAULT_QUALITY = '320k';
+const DEFAULT_SCRIPT_URL = 'https://ghproxy.net/raw.githubusercontent.com/pdone/lx-music-source/main/qdy/latest.js';
 
 module.exports = function activate(api) {
     const log = api.log;
@@ -21,7 +22,7 @@ module.exports = function activate(api) {
 
     // -------- 持久化配置 --------
     const getConfig = async () => {
-        const scriptUrl = (await api.storage.data.get('scriptUrl')) || '';
+        const scriptUrl = (await api.storage.data.get('scriptUrl')) || DEFAULT_SCRIPT_URL;
         const quality = (await api.storage.data.get('quality')) || DEFAULT_QUALITY;
         return { scriptUrl, quality };
     };
@@ -379,12 +380,10 @@ module.exports = function activate(api) {
 
     // -------- 自动加载已保存的脚本 --------
     getConfig().then(config => {
-        if (config.scriptUrl) {
-            log.info('自动加载已保存的脚本...');
-            loadScript(config.scriptUrl).catch(err => {
-                log.error(`自动加载失败: ${err.message || err}`);
-            });
-        }
+        log.info('自动加载 LX Music 脚本...');
+        loadScript(config.scriptUrl || DEFAULT_SCRIPT_URL).catch(err => {
+            log.error(`自动加载失败: ${err.message || err}`);
+        });
     });
 
     log.info('LX Music 自定义源适配器初始化完成');
