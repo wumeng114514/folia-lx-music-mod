@@ -2,6 +2,12 @@
 
 在线音源适配器 Folia 模组。支持多平台搜索和播放。
 
+## 截图
+
+![截图1](screenshot1.png)
+
+![截图2](screenshot2.png)
+
 ## 功能
 
 - 多平台独立搜索（WY / KW / QQ）
