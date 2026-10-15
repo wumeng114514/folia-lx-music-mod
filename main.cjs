@@ -278,12 +278,21 @@ module.exports = function activate(api) {
             throw new Error('脚本未加载');
         }
         const q = quality || DEFAULT_QUALITY;
+        // musicInfo 必须包含 source 字段，否则聚合 API 会返回 "source not match"
+        const info = {
+            source,
+            songmid: songId,
+            id: songId,
+            ...(musicInfo || {}),
+        };
+        // 确保 source 字段存在
+        if (!info.source) info.source = source;
         const url = await requestHandler({
             source,
             action: 'musicUrl',
             info: {
                 type: q,
-                musicInfo: musicInfo || { songmid: songId, id: songId },
+                musicInfo: info,
             },
         });
         return url;

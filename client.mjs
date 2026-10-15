@@ -88,16 +88,16 @@ export default async function activate(folium) {
                 // 映射 Folia quality 到 LX quality
                 const q = quality || '320k';
 
-                const result = await folium.rpc.call('getAudioUrl', {
+                const musicInfo = {
                     source,
-                    songId,
-                    quality: q,
-                    musicInfo: {
-                        songmid: songId,
-                        id: songId,
-                        name: song.title || '',
-                        singer: (song.artists || []).join(' '),
-                    },
+                    songmid: songId,
+                    id: songId,
+                    name: song.title || '',
+                    singer: (song.artists || []).join(' '),
+                };
+
+                const result = await folium.rpc.call('getAudioUrl', {
+                    source, songId, quality: q, musicInfo,
                 });
 
                 if (result?.success && result.url) {
@@ -110,8 +110,7 @@ export default async function activate(folium) {
                     if (fq === q) continue;
                     try {
                         const r2 = await folium.rpc.call('getAudioUrl', {
-                            source, songId, quality: fq,
-                            musicInfo: { songmid: songId, id: songId, name: song.title || '', singer: (song.artists || []).join(' ') },
+                            source, songId, quality: fq, musicInfo,
                         });
                         if (r2?.success && r2.url) return { url: r2.url };
                     } catch (_) {}
