@@ -1,5 +1,7 @@
 # Folia LX Music 音源 Mod
 
+![预览](preview.png)
+
 [Folia](https://folia.app) 的 [Folium](https://folia.app/folium) 模组，让你通过 [洛雪音乐 (LX Music)](https://github.com/lyswhut/lx-music-desktop) 自定义源脚本在 Folia 中搜索和播放音乐。
 
 ## ✨ 功能
