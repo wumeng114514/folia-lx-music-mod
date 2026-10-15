@@ -34,12 +34,18 @@ export default async function activate(folium) {
     // 监听设置变化同步到主进程
     if (section.params) {
         try {
+            const readValue = value => {
+                if (typeof value === 'string') return value.trim();
+                if (Array.isArray(value)) return readValue(value[0]);
+                if (value && typeof value === 'object') return readValue(value.value ?? value.url ?? value.scriptUrl ?? value.input);
+                return '';
+            };
             const syncSettings = async () => {
-                const url = section.params.get('script-url') ?? '';
-                const quality = section.params.get('quality') ?? '320k';
+                const url = readValue(section.params.get('script-url'));
+                const quality = readValue(section.params.get('quality')) || '320k';
                 await folium.rpc.call('setConfig', { scriptUrl: url, quality });
                 if (url) {
-                    const result = await folium.rpc.call('loadScript', url);
+                    const result = await folium.rpc.call('loadScript', { url });
                     log.info(result.success ? '脚本加载成功' : '脚本加载失败: ' + result.error);
                 }
             };

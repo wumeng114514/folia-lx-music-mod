@@ -21,9 +21,20 @@ module.exports = function activate(api) {
     let scriptError = null;
 
     // -------- 持久化配置 --------
+    function normalizeScriptUrl(value) {
+        if (typeof value === 'string') return value.trim();
+        if (Array.isArray(value)) return normalizeScriptUrl(value[0]);
+        if (value && typeof value === 'object') {
+            return normalizeScriptUrl(value.url ?? value.scriptUrl ?? value.value ?? value.input);
+        }
+        return '';
+    }
+
     const getConfig = async () => {
-        const scriptUrl = (await api.storage.data.get('scriptUrl')) || DEFAULT_SCRIPT_URL;
-        const quality = (await api.storage.data.get('quality')) || DEFAULT_QUALITY;
+        const storedUrl = await api.storage.data.get('scriptUrl');
+        const storedQuality = await api.storage.data.get('quality');
+        const scriptUrl = normalizeScriptUrl(storedUrl) || DEFAULT_SCRIPT_URL;
+        const quality = typeof storedQuality === 'string' && storedQuality ? storedQuality : DEFAULT_QUALITY;
         return { scriptUrl, quality };
     };
 
@@ -332,16 +343,19 @@ module.exports = function activate(api) {
         return { ...config, loaded: scriptLoaded, error: scriptError, sources: scriptSources };
     });
 
-    api.rpc.handle('setConfig', async (config) => {
-        if (config.scriptUrl !== undefined) await api.storage.data.set('scriptUrl', String(config.scriptUrl));
+    api.rpc.handle('setConfig', async (arg) => {
+        const config = Array.isArray(arg) ? arg[0] : (arg || {});
+        const url = normalizeScriptUrl(config.scriptUrl ?? config['script-url'] ?? config.url);
+        if (url) await api.storage.data.set('scriptUrl', url);
         if (config.quality !== undefined) await api.storage.data.set('quality', String(config.quality));
         log.info('配置已更新');
         return await getConfig();
     });
 
     api.rpc.handle('loadScript', async (arg) => {
-        const url = typeof arg === 'string' ? arg : arg?.url;
-        if (!url) return { success: false, error: '请输入脚本 URL' };
+        const value = Array.isArray(arg) ? arg[0] : arg;
+        const url = normalizeScriptUrl(value);
+        if (!url || !/^https?:\/\//i.test(url)) return { success: false, error: '请输入有效的脚本 URL' };
         await api.storage.data.set('scriptUrl', url);
         return await loadScript(url);
     });
