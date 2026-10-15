@@ -79,11 +79,16 @@ export default async function activate(folium) {
 
             // 获取音频 URL
             async getAudioUrl(song, quality) {
-                const mediaId = song.id;
-                // mediaId 格式: "source:songId"
+                const mediaId = String(song?.id ?? '');
+                // Folia 可能传入 source:id，也可能只传 id；优先使用搜索结果携带的平台信息。
                 const parts = mediaId.split(':');
-                const source = parts.length > 1 ? parts[0] : 'wy';
-                const songId = parts.length > 1 ? parts.slice(1).join(':') : mediaId;
+                const source = ['wy', 'kg', 'kw', 'tx', 'mg'].includes(parts[0])
+                    ? parts[0]
+                    : (song?.source || 'wy');
+                const songId = ['wy', 'kg', 'kw', 'tx', 'mg'].includes(parts[0])
+                    ? parts.slice(1).join(':')
+                    : mediaId;
+                if (!songId) throw new Error('歌曲 ID 为空');
 
                 // 映射 Folia quality → LX quality
                 const qualityMap = {

@@ -277,7 +277,14 @@ module.exports = function activate(api) {
         if (!scriptLoaded || !requestHandler) {
             throw new Error('脚本未加载');
         }
-        const q = quality || DEFAULT_QUALITY;
+        const qualityMap = {
+            standard: '128k',
+            high: '320k',
+            lossless: 'flac',
+            hires: 'flac24bit',
+        };
+        const q = qualityMap[quality] || quality || DEFAULT_QUALITY;
+        log.info(`[LX] 请求播放 source=${source} id=${songId} quality=${q}`);
         // musicInfo 必须包含 source 字段，否则聚合 API 会返回 "source not match"
         const info = {
             source,
@@ -339,8 +346,16 @@ module.exports = function activate(api) {
         try {
             const config = await getConfig();
             const q = quality || config.quality;
+            log.info(`[getAudioUrl] source=${source} songId=${songId} quality=${q} name=${musicInfo?.name || '?'}`);
             const url = await getAudioUrlFromLx(source, songId, q, musicInfo);
-            return { success: true, url };
+            log.info(`[getAudioUrl] 成功: ${typeof url === 'string' ? url.substring(0, 100) : JSON.stringify(url)?.substring(0, 100)}`);
+            if (typeof url === 'string') {
+                return { success: true, url };
+            } else if (url && typeof url === 'object' && url.url) {
+                return { success: true, url: url.url };
+            } else {
+                return { success: false, error: '返回的 URL 格式无效' };
+            }
         } catch (err) {
             log.error(`获取音频 URL 失败: ${err.message}`);
             return { success: false, error: err.message };
