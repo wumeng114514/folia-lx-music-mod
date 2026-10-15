@@ -79,7 +79,22 @@ module.exports = function activate(api) {
                 res.on('data', c => chunks.push(c));
                 res.on('end', () => {
                     const raw = Buffer.concat(chunks).toString('utf-8');
-                    try { resolve(JSON.parse(raw)); } catch (_) { resolve(raw); }
+                    try {
+                        resolve(JSON.parse(raw));
+                    } catch (_) {
+                        // 酷我旧搜索接口返回 JavaScript 对象格式而非严格 JSON。
+                        try {
+                            const normalized = raw
+                                .replace(/&nbsp;/g, ' ')
+                                .replace(/&amp;/g, '&')
+                                .replace(/&quot;/g, '\"')
+                                .replace(/([{,])\s*([A-Za-z0-9_]+)\s*:/g, '$1\"$2\":')
+                                .replace(/'([^'\\]*(?:\\.[^'\\]*)*)'/g, (_, value) => JSON.stringify(value));
+                            resolve(JSON.parse(normalized));
+                        } catch (_) {
+                            resolve(raw);
+                        }
+                    }
                 });
             });
             req.on('error', reject);

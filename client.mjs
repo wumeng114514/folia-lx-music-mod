@@ -71,6 +71,7 @@ export default async function activate(folium) {
                     title: s.title || '',
                     artists: s.artists || [],
                     album: s.album || '',
+                    album: s.album || '',
                     coverUrl: s.coverUrl || '',
                     durationMs: s.durationMs || 0,
                 }));
