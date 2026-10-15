@@ -310,7 +310,7 @@ module.exports = function activate(api) {
         };
         // 确保 source 字段存在
         if (!info.source) info.source = source;
-        const url = await requestHandler({
+        const result = await requestHandler({
             source,
             action: 'musicUrl',
             info: {
@@ -318,7 +318,12 @@ module.exports = function activate(api) {
                 musicInfo: info,
             },
         });
-        return url;
+        // 部分 LX 源会在 URL 后附加换行符或引号，必须在交给播放器前清理。
+        if (typeof result === 'string') return result.trim().replace(/^['\"]|['\"]$/g, '');
+        if (result && typeof result.url === 'string') {
+            return { ...result, url: result.url.trim().replace(/^['\"]|['\"]$/g, '') };
+        }
+        return result;
     }
 
     // -------- RPC 接口 --------
