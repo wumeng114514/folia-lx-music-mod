@@ -1,0 +1,19 @@
+{
+  "folium": 1,
+  "id": "lx-music-source",
+  "name": "LX Music 音源",
+  "version": "2.0.0",
+  "author": "Folia Community",
+  "description": "洛雪音乐自定义源适配器，支持搜索和播放",
+  "main": "main.cjs",
+  "client": "client.mjs",
+  "permissions": [
+    "net.fetch",
+    "filesystem.data",
+    "runtime.playback"
+  ],
+  "experimental": [
+    "omni.providers",
+    "omni.hooks"
+  ]
+}
