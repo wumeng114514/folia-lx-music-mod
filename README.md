@@ -41,7 +41,7 @@
 
 - **Folium v1.4** 兼容
 - 使用 `omni.providers` 实验性 API 注册为 Folia 音源
-- 在 Node.js `vm` 沙箱中安全执行 LX 源脚本
+- 在全局环境中直接执行 LX 源脚本（兼容性最佳）
 - 模拟完整的 `globalThis.lx` API（`request`、`utils.crypto`、`utils.zlib` 等）
 
 ## ⚠️ 免责声明

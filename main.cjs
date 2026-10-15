@@ -6,7 +6,6 @@ const http = require('http');
 const https = require('https');
 const crypto = require('crypto');
 const zlib = require('zlib');
-const vm = require('vm');
 
 const DEFAULT_QUALITY = '320k';
 
@@ -238,44 +237,17 @@ module.exports = function activate(api) {
             },
         };
 
-        // vm 沙箱
-        const sandbox = {
-            lx: lxApi,
-            console: {
-                log: (...args) => log.info(`[LX] ${args.join(' ')}`),
-                warn: (...args) => log.warn(`[LX] ${args.join(' ')}`),
-                error: (...args) => log.error(`[LX] ${args.join(' ')}`),
-                info: (...args) => log.info(`[LX] ${args.join(' ')}`),
-            },
-            require: sandboxRequire,
-            module: { exports: {} }, exports: {},
-            setTimeout, setInterval, clearTimeout, clearInterval,
-            Buffer, URL, URLSearchParams, TextEncoder, TextDecoder,
-            Promise, JSON, Math, Date, RegExp, Array, Object, String, Number, BigInt, Symbol,
-            Map, Set, WeakMap, WeakSet,
-            Error, TypeError, RangeError, SyntaxError, ReferenceError, URIError, EvalError, Function,
-            parseInt, parseFloat, isNaN, isFinite, NaN, Infinity, undefined,
-            encodeURIComponent, decodeURIComponent, encodeURI, decodeURI, escape, unescape,
-            btoa: (str) => Buffer.from(str, 'binary').toString('base64'),
-            atob: (str) => Buffer.from(str, 'base64').toString('binary'),
-            Uint8Array, Int8Array, Uint16Array, Int16Array, Uint32Array, Int32Array,
-            Float32Array, Float64Array, ArrayBuffer, DataView, Proxy, Reflect,
-            queueMicrotask: globalThis.queueMicrotask,
-            AggregateError: globalThis.AggregateError,
-        };
-        sandbox.window = sandbox;
-        sandbox.self = sandbox;
-        sandbox.globalThis = sandbox;
-        sandbox.global = sandbox;
+        // 直接在全局环境中挂载 lx API 并执行脚本
+        const prevLx = globalThis.lx;
+        globalThis.lx = lxApi;
 
         try {
-            const context = vm.createContext(sandbox);
-            const script = new vm.Script(scriptContent, { filename: 'lx-source.js', timeout: 60000 });
-            script.runInContext(context);
-            log.info('[LX] 同步执行完成');
+            (0, eval)(scriptContent);
+            log.info('[LX] 脚本执行完成');
         } catch (e) {
             scriptError = e.message;
             log.error(`[LX] 执行出错: ${e.message}`);
+            globalThis.lx = prevLx;
             return { success: false, error: scriptError };
         }
 
@@ -378,22 +350,6 @@ module.exports = function activate(api) {
 
     log.info('LX Music 自定义源适配器初始化完成');
 };
-
-// -------- 受限的 require --------
-function sandboxRequire(id) {
-    const allowed = {
-        'crypto': require('crypto'), 'node:crypto': require('crypto'),
-        'http': require('http'), 'node:http': require('http'),
-        'https': require('https'), 'node:https': require('https'),
-        'url': require('url'), 'node:url': require('url'),
-        'querystring': require('querystring'), 'node:querystring': require('querystring'),
-        'buffer': require('buffer'), 'node:buffer': require('buffer'),
-        'zlib': require('zlib'), 'node:zlib': require('zlib'),
-    };
-    if (allowed[id]) return allowed[id];
-    throw new Error(`require('${id}') is not allowed`);
-}
-sandboxRequire.resolve = (id) => id;
 
 // -------- 下载文本 --------
 function downloadText(url) {
