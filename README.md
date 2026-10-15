@@ -29,10 +29,7 @@
 ## 🔧 使用
 
 1. 启用模组后，进入模组设置
-2. 在「**脚本 URL**」中填入 LX Music 自定义源脚本地址，例如：
-   ```
-   https://raw.githubusercontent.com/pdone/lx-music-source/main/juhe/latest.js
-   ```
+2. 在「**脚本 URL**」中填入 LX Music 自定义源脚本地址
 3. 保存设置并重启 Folia
 4. 在音源列表中选择 **LX Music** 即可搜索和播放
 
