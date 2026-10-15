@@ -85,8 +85,14 @@ export default async function activate(folium) {
                 const source = parts.length > 1 ? parts[0] : 'wy';
                 const songId = parts.length > 1 ? parts.slice(1).join(':') : mediaId;
 
-                // 映射 Folia quality 到 LX quality
-                const q = quality || '320k';
+                // 映射 Folia quality → LX quality
+                const qualityMap = {
+                    standard: '128k',
+                    high: '320k',
+                    lossless: 'flac',
+                    hires: 'flac24bit',
+                };
+                const q = qualityMap[quality] || quality || '320k';
 
                 const musicInfo = {
                     source,
