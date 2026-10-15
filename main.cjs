@@ -1,434 +1,305 @@
-// main.cjs — LX Music 自定义源适配器 (Electron 主进程)
-// 注册为 Folia omni.providers，提供搜索和播放能力
+// main.cjs — Folia 在线音源适配器 (Electron 主进程)
+// 所有播放逻辑内置，不下载/执行任何远程代码
 'use strict';
 
-const http = require('http');
 const https = require('https');
-const crypto = require('crypto');
-const zlib = require('zlib');
 
-const DEFAULT_QUALITY = '320k';
-const DEFAULT_SCRIPT_URL = 'https://ghproxy.net/raw.githubusercontent.com/pdone/lx-music-source/main/qdy/latest.js';
+// -------- 域名白名单 --------
+const ALLOWED_HOSTS = new Set([
+    'music.163.com',          // WY 搜索/详情/歌词
+    'c.y.qq.com',             // QQ 搜索/歌词
+    'y.qq.com',               // QQ 封面
+    'search.kuwo.cn',         // KW 搜索
+    'img1.kuwo.cn',           // KW 封面
+    'oiapi.net',              // 播放URL获取
+    'p1.music.126.net',       // WY 封面CDN
+    'p2.music.126.net',       // WY 封面CDN
+]);
+
+const MAX_REDIRECTS = 3;
+const MAX_RESPONSE_BYTES = 5 * 1024 * 1024; // 5MB
+const REQUEST_TIMEOUT_MS = 10000;
+
+let abortControllers = [];
 
 module.exports = function activate(api) {
     const log = api.log;
-    log.info('LX Music 自定义源适配器正在初始化...');
+    log.info('在线音源适配器正在初始化...');
 
-    // -------- 脚本运行时状态 --------
-    let scriptSources = null;
-    let requestHandler = null;
-    let scriptLoaded = false;
-    let scriptError = null;
+    // -------- 安全 HTTPS 请求 --------
+    function safeRequest(url, options = {}, redirectCount = 0) {
+        return new Promise((resolve, reject) => {
+            let parsed;
+            try { parsed = new URL(url); } catch (e) { return reject(new Error('无效URL: ' + url)); }
 
-    // -------- 持久化配置 --------
-    function normalizeScriptUrl(value) {
-        if (typeof value === 'string') return value.trim();
-        if (Array.isArray(value)) return normalizeScriptUrl(value[0]);
-        if (value && typeof value === 'object') {
-            return normalizeScriptUrl(value.url ?? value.scriptUrl ?? value.value ?? value.input);
-        }
+            if (parsed.protocol !== 'https:') {
+                return reject(new Error('仅允许 HTTPS: ' + url));
+            }
+            if (!ALLOWED_HOSTS.has(parsed.hostname)) {
+                return reject(new Error('域名不在白名单: ' + parsed.hostname));
+            }
+
+            const reqOptions = {
+                method: options.method || 'GET',
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    ...(options.headers || {}),
+                },
+                timeout: REQUEST_TIMEOUT_MS,
+            };
+
+            const req = https.request(url, reqOptions, (res) => {
+                if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+                    if (redirectCount >= MAX_REDIRECTS) {
+                        return reject(new Error('超过最大重定向次数'));
+                    }
+                    return safeRequest(res.headers.location, { method: 'GET' }, redirectCount + 1).then(resolve, reject);
+                }
+
+                const chunks = [];
+                let totalBytes = 0;
+                res.on('data', (chunk) => {
+                    totalBytes += chunk.length;
+                    if (totalBytes > MAX_RESPONSE_BYTES) {
+                        res.destroy();
+                        reject(new Error('响应超过 5MB 限制'));
+                        return;
+                    }
+                    chunks.push(chunk);
+                });
+                res.on('end', () => {
+                    resolve({ statusCode: res.statusCode, body: Buffer.concat(chunks).toString('utf-8') });
+                });
+                res.on('error', reject);
+            });
+            req.on('error', reject);
+            req.on('timeout', () => { req.destroy(); reject(new Error('请求超时')); });
+            if (options.body) {
+                req.write(typeof options.body === 'string' ? options.body : JSON.stringify(options.body));
+            }
+            req.end();
+            abortControllers.push(() => { try { req.destroy(); } catch (_) {} });
+        });
+    }
+
+    async function fetchJson(url, options = {}) {
+        const res = await safeRequest(url, options);
+        try { return JSON.parse(res.body); } catch (_) { return res.body; }
+    }
+
+    function normalizeCoverUrl(value) {
+        if (typeof value !== 'string') return '';
+        let url = value.trim();
+        if (!url) return '';
+        if (url.startsWith('//')) return 'https:' + url;
+        if (url.startsWith('https://')) return url;
+        if (url.startsWith('http://')) return url.replace('http://', 'https://');
         return '';
     }
 
-    const getConfig = async () => {
-        const storedUrl = await api.storage.data.get('scriptUrl');
-        const storedQuality = await api.storage.data.get('quality');
-        const scriptUrl = normalizeScriptUrl(storedUrl) || DEFAULT_SCRIPT_URL;
-        const quality = typeof storedQuality === 'string' && storedQuality ? storedQuality : DEFAULT_QUALITY;
-        return { scriptUrl, quality };
-    };
+    // ======== 搜索 ========
 
-    // -------- HTTP 请求 (给 lx 脚本用) --------
-    function lxRequest(url, options, callback) {
-        const transport = (url || '').startsWith('https') ? https : http;
-        const headers = {
-            ...(options?.headers || {}),
-            'User-Agent': options?.headers?.['User-Agent'] ||
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        };
-        const method = (options?.method || 'GET').toUpperCase();
-        const req = transport.request(url, { method, headers, timeout: options?.timeout || 15000 }, (res) => {
-            if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-                lxRequest(res.headers.location, options, callback);
-                return;
-            }
-            const chunks = [];
-            res.on('data', c => chunks.push(c));
-            res.on('end', () => {
-                const rawBody = Buffer.concat(chunks);
-                let body = rawBody.toString('utf-8');
-                try { body = JSON.parse(body); } catch (_) {}
-                callback(null, { statusCode: res.statusCode, headers: res.headers, body, rawBody }, body);
-            });
-        });
-        req.on('error', err => callback(err));
-        req.on('timeout', () => { req.destroy(); callback(new Error('Request timeout')); });
-        if (options?.body) req.write(typeof options.body === 'string' ? options.body : JSON.stringify(options.body));
-        if (options?.form) {
-            const d = new URLSearchParams(options.form).toString();
-            try { if (!req.headersSent) req.setHeader('Content-Type', 'application/x-www-form-urlencoded'); } catch (_) {}
-            req.write(d);
-        }
-        req.end();
-        return () => req.destroy();
-    }
-
-    // -------- 通用 HTTP GET/POST (给搜索用) --------
-    function httpJson(url, options = {}) {
-        return new Promise((resolve, reject) => {
-            const transport = (url || '').startsWith('https') ? https : http;
-            const method = (options.method || 'GET').toUpperCase();
-            const headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                ...(options.headers || {}),
-            };
-            const req = transport.request(url, { method, headers, timeout: 15000 }, (res) => {
-                if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-                    httpJson(res.headers.location, options).then(resolve, reject);
-                    return;
-                }
-                const chunks = [];
-                res.on('data', c => chunks.push(c));
-                res.on('end', () => {
-                    const raw = Buffer.concat(chunks).toString('utf-8');
-                    try {
-                        resolve(JSON.parse(raw));
-                    } catch (_) {
-                        // 酷我旧搜索接口返回 JavaScript 对象格式而非严格 JSON。
-                        try {
-                            const normalized = raw
-                                .replace(/&nbsp;/g, ' ')
-                                .replace(/&amp;/g, '&')
-                                .replace(/&quot;/g, '\"')
-                                .replace(/([{,])\s*([A-Za-z0-9_]+)\s*:/g, '$1\"$2\":')
-                                .replace(/'([^'\\]*(?:\\.[^'\\]*)*)'/g, (_, value) => JSON.stringify(value));
-                            resolve(JSON.parse(normalized));
-                        } catch (_) {
-                            resolve(raw);
-                        }
-                    }
-                });
-            });
-            req.on('error', reject);
-            req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
-            if (options.body) req.write(typeof options.body === 'string' ? options.body : JSON.stringify(options.body));
-            req.end();
-        });
-    }
-
-    // -------- 搜索 API（多平台聚合）--------
-    async function searchSongs(keyword, limit = 30, offset = 0) {
-        const results = [];
-        const errors = [];
-
-        // 并行搜索多个平台
-        const searches = [];
-
-        // 1. 网易云
-        searches.push(searchNetease(keyword, limit, offset).catch(e => { errors.push('wy:' + e.message); return []; }));
-        // 2. 酷我
-        searches.push(searchKuwo(keyword, limit, offset).catch(e => { errors.push('kw:' + e.message); return []; }));
-
-        const allResults = await Promise.all(searches);
-        for (const r of allResults) results.push(...r);
-
-        if (errors.length > 0) log.warn('搜索部分失败: ' + errors.join(', '));
-        return results;
-    }
-
-    // 网易云音乐搜索
+    // WY 搜索（含封面批量获取）
     async function searchNetease(keyword, limit, offset) {
-        const url = `https://music.163.com/api/search/get/web?s=${encodeURIComponent(keyword)}&type=1&limit=${limit}&offset=${offset}`;
-        const data = await httpJson(url, {
+        const searchUrl = `https://music.163.com/api/search/get/web?s=${encodeURIComponent(keyword)}&type=1&limit=${limit}&offset=${offset}`;
+        const searchData = await fetchJson(searchUrl, {
             headers: { 'Referer': 'https://music.163.com/', 'Cookie': 'appver=2.7.1' },
         });
-        if (!data?.result?.songs) return [];
-        return data.result.songs.map(s => ({
+        if (!searchData?.result?.songs?.length) return [];
+        const songs = searchData.result.songs;
+
+        // 批量获取封面
+        let coverMap = {};
+        try {
+            const ids = songs.map(s => s.id);
+            const detailUrl = `https://music.163.com/api/song/detail?ids=${encodeURIComponent(JSON.stringify(ids))}`;
+            const detailData = await fetchJson(detailUrl, {
+                headers: { 'Referer': 'https://music.163.com/', 'Cookie': 'appver=2.7.1' },
+            });
+            if (detailData?.songs) {
+                for (const s of detailData.songs) {
+                    coverMap[s.id] = s.album?.picUrl || '';
+                }
+            }
+        } catch (e) { log.warn('WY 封面获取失败: ' + e.message); }
+
+        return songs.map(s => ({
             id: String(s.id),
             title: s.name || '',
             artists: (s.artists || []).map(a => a.name || ''),
             album: s.album?.name || '',
-            coverUrl: s.album?.picUrl || '',
+            coverUrl: normalizeCoverUrl(coverMap[s.id] || ''),
             durationMs: s.duration || 0,
             source: 'wy',
         }));
     }
 
-    // 酷我音乐搜索
+    // KW 搜索
     async function searchKuwo(keyword, limit, offset) {
-        const page = Math.floor(offset / limit) + 1;
-        const url = `https://search.kuwo.cn/r.s?client=kt&all=${encodeURIComponent(keyword)}&pn=${page - 1}&rn=${limit}&vipver=1&ft=music&encoding=utf8&rformat=json&moession=1&show_copyright_off=1&searchapi=6`;
-        const data = await httpJson(url, {
-            headers: { 'Referer': 'https://www.kuwo.cn/', 'Secret': '' },
-        });
+        const page = Math.floor(offset / limit);
+        const url = `https://search.kuwo.cn/r.s?client=kt&all=${encodeURIComponent(keyword)}&pn=${page}&rn=${limit}&vipver=1&ft=music&encoding=utf8&rformat=json&moession=1&show_copyright_off=1&searchapi=6`;
+        const res = await safeRequest(url, { headers: { 'Referer': 'https://search.kuwo.cn/' } });
+        let data;
+        try { data = JSON.parse(res.body); } catch (_) {
+            try { data = JSON.parse(res.body.replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/'/g, '"')); } catch (_) { return []; }
+        }
         if (!data?.abslist) return [];
         return data.abslist.map(s => ({
             id: s.DC_TARGETID || s.MUSICRID?.replace('MUSIC_', '') || '',
             title: (s.SONGNAME || '').replace(/<[^>]+>/g, ''),
             artists: [(s.ARTIST || '').replace(/<[^>]+>/g, '')],
             album: (s.ALBUM || '').replace(/<[^>]+>/g, ''),
-            coverUrl: s.web_albumpic_short ? `https://img1.kuwo.cn/star/albumcover/${s.web_albumpic_short}` : '',
+            coverUrl: s.web_albumpic_short
+                ? normalizeCoverUrl('https://img1.kuwo.cn/star/albumcover/' + s.web_albumpic_short)
+                : '',
             durationMs: parseInt(s.DURATION || '0') * 1000,
             source: 'kw',
         }));
     }
 
-    // -------- 解析脚本头部注释 --------
-    function parseScriptMeta(content) {
-        const match = content.match(/\/\*!?\s*\n([\s\S]*?)\*\//);
-        if (!match) return {};
-        const meta = {};
-        const re = /@(\w+)\s+(.+)/g;
-        let m;
-        while ((m = re.exec(match[1])) !== null) {
-            meta[m[1]] = m[2].trim();
-        }
-        return meta;
+    // QQ 搜索
+    async function searchQQ(keyword, limit, offset) {
+        const page = Math.floor(offset / limit) + 1;
+        const url = `https://c.y.qq.com/soso/fcgi-bin/client_search_cp?w=${encodeURIComponent(keyword)}&p=${page}&n=${limit}&format=json`;
+        const data = await fetchJson(url, { headers: { 'Referer': 'https://y.qq.com/' } });
+        if (!data?.data?.song?.list) return [];
+        return data.data.song.list.map(s => ({
+            id: s.songmid || String(s.songid || ''),
+            title: s.songname || '',
+            artists: (s.singer || []).map(a => a.name || ''),
+            album: s.albumname || '',
+            coverUrl: s.albummid
+                ? 'https://y.qq.com/music/photo_new/T002R300x300M000' + s.albummid + '.jpg'
+                : '',
+            durationMs: (s.interval || 0) * 1000,
+            source: 'tx',
+        }));
     }
 
-    // -------- 加载 LX 脚本 --------
-    async function loadScript(scriptUrl) {
-        log.info(`正在下载脚本: ${scriptUrl}`);
-        scriptLoaded = false;
-        scriptError = null;
-        scriptSources = null;
-        requestHandler = null;
+    // ======== 歌词 ========
 
-        let scriptContent;
-        try {
-            scriptContent = await downloadText(scriptUrl);
-        } catch (err) {
-            scriptError = `下载脚本失败: ${err.message}`;
-            log.error(scriptError);
-            return { success: false, error: scriptError };
-        }
-        log.info(`脚本下载完成, 大小: ${scriptContent.length} 字节`);
-
-        const meta = parseScriptMeta(scriptContent);
-        log.info(`脚本: ${meta.name || '未知'} v${meta.version || '?'} by ${meta.author || '?'}`);
-
-        // 构造 lx API
-        const lxApi = {
-            version: '2.10.0',
-            currentScriptInfo: {
-                name: meta.name || '自定义源',
-                version: meta.version || '1.0.0',
-                description: meta.description || '',
-                author: meta.author || '',
-                homepage: meta.homepage || '',
-                rawScript: scriptContent,
-            },
-            env: 'desktop',
-            EVENT_NAMES: { inited: 'inited', request: 'request', updateAlert: 'updateAlert' },
-            on(name, handler) {
-                log.info(`[LX] on('${name}')`);
-                if (name === 'request') {
-                    requestHandler = handler;
-                    log.info('[LX] request handler 已注册');
-                }
-            },
-            send(name, data) {
-                log.info(`[LX] send('${name}')`);
-                if (name === 'inited') {
-                    if (data?.status !== false) {
-                        scriptLoaded = true;
-                        scriptSources = data?.sources || {};
-                        log.info(`[LX] 初始化成功! 源: ${Object.keys(scriptSources).join(', ')}`);
-                    } else {
-                        scriptError = '脚本初始化返回失败';
-                        log.error(scriptError);
-                    }
-                }
-            },
-            request: lxRequest,
-            utils: {
-                buffer: {
-                    from: (data, encoding) => Buffer.from(data, encoding),
-                    bufToString: (buf, encoding) => Buffer.isBuffer(buf) ? buf.toString(encoding) : String(buf),
-                },
-                crypto: {
-                    aesEncrypt(buffer, mode, key, iv) {
-                        try {
-                            const cipher = crypto.createCipheriv(mode, key, iv);
-                            return Buffer.concat([cipher.update(buffer), cipher.final()]);
-                        } catch (e) { return buffer; }
-                    },
-                    md5(str) { return crypto.createHash('md5').update(typeof str === 'string' ? str : String(str)).digest('hex'); },
-                    randomBytes(size) { return crypto.randomBytes(size).toString('hex'); },
-                    rsaEncrypt(buffer, key) { try { return crypto.publicEncrypt(key, buffer); } catch (e) { return buffer; } },
-                },
-                zlib: {
-                    inflate: (buf) => new Promise((r, j) => zlib.inflate(buf, (e, v) => e ? j(e) : r(v))),
-                    deflate: (buf) => new Promise((r, j) => zlib.deflate(buf, (e, v) => e ? j(e) : r(v))),
-                },
-            },
-        };
-
-        // 直接在全局环境中挂载 lx API 并执行脚本
-        const prevLx = globalThis.lx;
-        globalThis.lx = lxApi;
-
-        try {
-            (0, eval)(scriptContent);
-            log.info('[LX] 脚本执行完成');
-        } catch (e) {
-            scriptError = e.message;
-            log.error(`[LX] 执行出错: ${e.message}`);
-            globalThis.lx = prevLx;
-            return { success: false, error: scriptError };
-        }
-
-        // 等待异步初始化
-        await new Promise((resolve) => {
-            if (scriptLoaded) { resolve(); return; }
-            let waited = 0;
-            const timer = setInterval(() => {
-                waited += 200;
-                if (scriptLoaded || scriptError || waited > 20000) {
-                    clearInterval(timer);
-                    resolve();
-                }
-            }, 200);
+    // WY 歌词
+    async function getLyricsNetease(songId) {
+        const url = `https://music.163.com/api/song/lyric?id=${encodeURIComponent(songId)}&lv=1&tv=1`;
+        const data = await fetchJson(url, {
+            headers: { 'Referer': 'https://music.163.com/', 'Cookie': 'appver=2.7.1' },
         });
-
-        if (scriptLoaded) {
-            return { success: true, sources: scriptSources };
-        } else {
-            if (!scriptError) scriptError = '脚本初始化超时';
-            return { success: false, error: scriptError };
-        }
+        return data?.lrc?.lyric || null;
     }
 
-    // -------- 通过 LX 脚本获取音频 URL --------
-    async function getAudioUrlFromLx(source, songId, quality, musicInfo) {
-        if (!scriptLoaded || !requestHandler) {
-            throw new Error('脚本未加载');
-        }
-        const qualityMap = {
-            standard: '128k',
-            high: '320k',
-            lossless: 'flac',
-            hires: 'flac24bit',
-        };
-        const q = qualityMap[quality] || quality || DEFAULT_QUALITY;
-        log.info(`[LX] 请求播放 source=${source} id=${songId} quality=${q}`);
-        // musicInfo 必须包含 source 字段，否则聚合 API 会返回 "source not match"
-        const info = {
-            source,
-            songmid: songId,
-            id: songId,
-            ...(musicInfo || {}),
-        };
-        // 确保 source 字段存在
-        if (!info.source) info.source = source;
-        const result = await requestHandler({
-            source,
-            action: 'musicUrl',
-            info: {
-                type: q,
-                musicInfo: info,
-            },
-        });
-        // 部分 LX 源会在 URL 后附加换行符或引号，必须在交给播放器前清理。
-        if (typeof result === 'string') return result.trim().replace(/^['\"]|['\"]$/g, '');
-        if (result && typeof result.url === 'string') {
-            return { ...result, url: result.url.trim().replace(/^['\"]|['\"]$/g, '') };
-        }
-        return result;
+    // QQ 歌词
+    async function getLyricsQQ(songmid) {
+        const url = `https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg?songmid=${encodeURIComponent(songmid)}&format=json&nobase64=1`;
+        const data = await fetchJson(url, { headers: { 'Referer': 'https://y.qq.com/' } });
+        return data?.lyric || null;
     }
 
-    // -------- RPC 接口 --------
-    api.rpc.handle('getConfig', async () => {
-        const config = await getConfig();
-        return { ...config, loaded: scriptLoaded, error: scriptError, sources: scriptSources };
-    });
+    // KW 歌词 — oiapi 返回的 message 里有时包含歌词信息，但没有独立歌词 API
+    // 暂不支持
 
-    api.rpc.handle('setConfig', async (arg) => {
-        const config = Array.isArray(arg) ? arg[0] : (arg || {});
-        const url = normalizeScriptUrl(config.scriptUrl ?? config['script-url'] ?? config.url);
-        if (url) await api.storage.data.set('scriptUrl', url);
-        if (config.quality !== undefined) await api.storage.data.set('quality', String(config.quality));
-        log.info('配置已更新');
-        return await getConfig();
-    });
+    // ======== 播放URL获取 ========
+    const QUALITY_TO_BR = { '128k': 7, '320k': 5, 'flac': 4, 'flac24bit': 3 };
 
-    api.rpc.handle('loadScript', async (arg) => {
-        const value = Array.isArray(arg) ? arg[0] : arg;
-        const url = normalizeScriptUrl(value);
-        if (!url || !/^https?:\/\//i.test(url)) return { success: false, error: '请输入有效的脚本 URL' };
-        await api.storage.data.set('scriptUrl', url);
-        return await loadScript(url);
-    });
+    async function getAudioUrl(source, songId, quality, musicInfo) {
+        const name = musicInfo?.name || '';
+        const singer = musicInfo?.singer || '';
+        const br = QUALITY_TO_BR[quality] || 7;
+        let url;
 
-    api.rpc.handle('getStatus', async () => ({
-        loaded: scriptLoaded,
-        error: scriptError,
-        sources: scriptSources,
-    }));
+        switch (source) {
+            case 'wy':
+                url = `https://oiapi.net/api/Music_163?id=${encodeURIComponent(songId)}`;
+                break;
+            case 'kw':
+                url = `https://oiapi.net/api/Kuwo?msg=${encodeURIComponent(name + ' ' + singer)}&n=1&br=${br}`;
+                break;
+            case 'tx':
+                url = `https://oiapi.net/api/QQ_Music?key=oiapi-ef6133b7-ac2f-dc7d-878c-d3e207a82575&type=json&br=${br}&n=1&mid=${encodeURIComponent(songId)}`;
+                break;
+            default:
+                throw new Error('不支持的平台: ' + source);
+        }
 
-    // 搜索 RPC
-    api.rpc.handle('search', async ({ keyword, limit, offset }) => {
+        const data = await fetchJson(url);
+
+        // WY
+        if (source === 'wy' && data?.code === 0 && data?.data?.[0]?.url) {
+            return data.data[0].url;
+        }
+        // KW — 从 message 提取
+        if (source === 'kw' && data?.code === 1 && data?.message) {
+            const match = data.message.match(/音乐链接：(https?:\/\/[^\s]+)/);
+            if (match) return match[1];
+        }
+        // QQ
+        if (source === 'tx' && data?.code === 0 && data?.data?.url) {
+            return data.data.url;
+        }
+
+        throw new Error('无法获取播放链接');
+    }
+
+    // ======== RPC 接口 ========
+
+    api.rpc.handle('searchPlatform', async (source, keyword, limit, offset) => {
         try {
-            const items = await searchSongs(keyword, limit || 30, offset || 0);
+            limit = limit || 30;
+            offset = offset || 0;
+            let items;
+            switch (source) {
+                case 'wy': items = await searchNetease(keyword, limit, offset); break;
+                case 'kw': items = await searchKuwo(keyword, limit, offset); break;
+                case 'tx': items = await searchQQ(keyword, limit, offset); break;
+                default: return { success: false, error: '不支持的平台', items: [] };
+            }
+            log.info(source + ' 搜索 "' + keyword + '" 返回 ' + items.length + ' 条');
             return { success: true, items };
         } catch (e) {
+            log.error(source + ' 搜索失败: ' + e.message);
             return { success: false, error: e.message, items: [] };
         }
     });
 
-    // 获取音频 URL RPC
-    api.rpc.handle('getAudioUrl', async ({ source, songId, quality, musicInfo }) => {
+    api.rpc.handle('getAudioUrl', async (source, songId, quality, musicInfo) => {
         try {
-            const config = await getConfig();
-            const q = quality || config.quality;
-            log.info(`[getAudioUrl] source=${source} songId=${songId} quality=${q} name=${musicInfo?.name || '?'}`);
-            const url = await getAudioUrlFromLx(source, songId, q, musicInfo);
-            log.info(`[getAudioUrl] 成功: ${typeof url === 'string' ? url.substring(0, 100) : JSON.stringify(url)?.substring(0, 100)}`);
-            if (typeof url === 'string') {
-                return { success: true, url };
-            } else if (url && typeof url === 'object' && url.url) {
-                return { success: true, url: url.url };
-            } else {
-                return { success: false, error: '返回的 URL 格式无效' };
+            log.info('[getAudioUrl] source=' + source + ' id=' + songId + ' quality=' + quality);
+            const url = await getAudioUrl(source, songId, quality, musicInfo);
+            if (typeof url === 'string' && url.startsWith('http')) {
+                log.info('[getAudioUrl] 成功: ' + url.substring(0, 80));
+                return { success: true, url: url.trim() };
             }
+            return { success: false, error: '无效的播放URL' };
         } catch (err) {
-            log.error(`获取音频 URL 失败: ${err.message}`);
+            log.error('获取音频URL失败: ' + err.message);
             return { success: false, error: err.message };
         }
     });
 
-    // -------- 自动加载已保存的脚本 --------
-    getConfig().then(config => {
-        log.info('自动加载 LX Music 脚本...');
-        loadScript(config.scriptUrl || DEFAULT_SCRIPT_URL).catch(err => {
-            log.error(`自动加载失败: ${err.message || err}`);
-        });
+    api.rpc.handle('getLyrics', async (source, songId) => {
+        try {
+            let lyrics = null;
+            switch (source) {
+                case 'wy': lyrics = await getLyricsNetease(songId); break;
+                case 'tx': lyrics = await getLyricsQQ(songId); break;
+                default: break;
+            }
+            if (lyrics) return { success: true, lyrics };
+            return { success: false, error: '暂不支持该平台歌词' };
+        } catch (e) {
+            log.warn('歌词获取失败: ' + e.message);
+            return { success: false, error: e.message };
+        }
     });
 
-    log.info('LX Music 自定义源适配器初始化完成');
+    // -------- 停用清理 --------
+    api.lifecycle.onDeactivate(() => {
+        log.info('在线音源适配器正在清理...');
+        for (const abort of abortControllers) {
+            try { abort(); } catch (_) {}
+        }
+        abortControllers = [];
+        log.info('在线音源适配器已清理');
+    });
+
+    log.info('在线音源适配器初始化完成');
 };
-
-// -------- 下载文本 --------
-function downloadText(url) {
-    return new Promise((resolve, reject) => {
-        const transport = (url || '').startsWith('https') ? require('https') : require('http');
-        const req = transport.get(url, {
-            headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Folia-LxMod/1.0)' },
-            timeout: 30000,
-        }, (res) => {
-            if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-                resolve(downloadText(res.headers.location));
-                return;
-            }
-            if (res.statusCode !== 200) {
-                reject(new Error(`HTTP ${res.statusCode}`));
-                return;
-            }
-            const chunks = [];
-            res.on('data', chunk => chunks.push(chunk));
-            res.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
-        });
-        req.on('error', reject);
-        req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
-    });
-}

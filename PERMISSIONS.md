@@ -1,22 +1,23 @@
 # 权限说明
 
-逐条说明 `mod.json` 里声明的每个 permission、embedOrigins 和 experimental 为什么需要。
+## filesystem.data
+用于通过 `api.storage.data` 持久化用户设置（音质偏好）。
 
-## permissions
+## 网络请求说明
+本模组在主进程中使用 Node.js `https` 模块发起网络请求（主进程 modApi 不提供 `net.fetch`）。
+所有请求均受以下限制：
 
-| 权限 | 说明 |
-|------|------|
-| `net.fetch` | 需要发起网络请求：下载用户填写的 LX Music 自定义源脚本、调用各平台搜索 API 获取歌曲列表、以及脚本内部请求音频播放链接。 |
-| `filesystem.data` | 需要读写模组数据存储（`api.storage.data`），用于持久化保存用户配置的脚本 URL 和音质偏好，下次启动时自动加载。 |
-| `runtime.playback` | 需要与 Folia 播放系统交互，为搜索到的歌曲提供音频播放链接。 |
+- **仅 HTTPS** — 拒绝 `http://` 请求
+- **域名白名单** — 仅允许请求代码中硬编码的固定域名列表
+- **重定向限制** — 最多 3 次，且重定向时不转发原始请求头
+- **响应大小限制** — 最多 5MB，超出立即断开
+- **请求超时** — 10 秒
 
-## embedOrigins
+白名单域名：
+- `music.163.com` — 搜索/详情/歌词
+- `c.y.qq.com` / `y.qq.com` — 搜索/封面/歌词
+- `search.kuwo.cn` / `img1.kuwo.cn` — 搜索/封面
+- `oiapi.net` — 播放URL获取
+- `p1.music.126.net` / `p2.music.126.net` — 封面CDN
 
-无。
-
-## experimental
-
-| API | 说明 |
-|-----|------|
-| `omni.providers` | 将 LX Music 注册为 Folia 的独立在线音源，使其出现在音源列表中，提供搜索和播放能力。 |
-| `omni.hooks` | 预留的音频回退钩子，当其他音源播放失败时可通过 LX 脚本尝试获取替代播放链接。 |
+不使用 `net.fetch` 权限，因为主进程 API（modApi）不暴露该接口。

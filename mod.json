@@ -1,20 +1,17 @@
 {
   "folium": 1,
   "id": "folia-lx-music-mod",
-  "name": "LX Music 音源",
-  "version": "2.0.0",
-  "author": "Folia Community",
-  "description": "洛雪音乐自定义源适配器，支持搜索和播放",
+  "name": "Online Music Source",
+  "version": "3.0.0",
+  "author": "wumeng114514",
+  "description": "在线音源适配器，支持多平台搜索和播放",
   "preview": "preview.png",
   "main": "main.cjs",
   "client": "client.mjs",
   "permissions": [
-    "net.fetch",
-    "filesystem.data",
-    "runtime.playback"
+    "filesystem.data"
   ],
   "experimental": [
-    "omni.providers",
-    "omni.hooks"
+    "omni.providers"
   ]
 }

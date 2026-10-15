@@ -1,21 +1,16 @@
-// client.mjs — LX Music 自定义源 Folia Provider (渲染进程)
+// client.mjs — Folia 在线音源适配器 (渲染进程)
+// WY / KW / QQ 三个平台独立注册
 
 export default async function activate(folium) {
     const log = folium.log;
-    log.info('LX Music Provider 初始化中...');
+    log.info('在线音源 Provider 初始化中...');
 
     // -------- 注册设置 --------
-    const section = folium.registries.settingsSections.register({
+    folium.registries.settingsSections.register({
         id: 'lx-music-settings',
-        label: { 'zh-CN': 'LX Music 音源', en: 'LX Music Source' },
-        description: { 'zh-CN': '填入洛雪音乐自定义源脚本 URL 后保存，重启生效', en: 'Enter LX Music source script URL' },
+        label: { 'zh-CN': '在线音源设置', en: 'Online Source Settings' },
+        description: { 'zh-CN': '在线音源播放质量设置', en: 'Online source playback quality settings' },
         settings: [
-            {
-                key: 'script-url',
-                type: 'text',
-                label: { 'zh-CN': '脚本 URL', en: 'Script URL' },
-                default: '',
-            },
             {
                 key: 'quality',
                 type: 'select',
@@ -26,121 +21,102 @@ export default async function activate(folium) {
                     { value: 'flac', label: 'FLAC' },
                     { value: 'flac24bit', label: 'Hi-Res' },
                 ],
-                default: '320k',
+                defaultValue: '320k',
             },
         ],
     });
 
-    // 监听设置变化同步到主进程
-    if (section.params) {
+    // -------- 平台定义 --------
+    const platforms = [
+        { id: 'lx-wy', source: 'wy', displayName: 'WY', shortName: 'WY' },
+        { id: 'lx-kw', source: 'kw', displayName: 'KW', shortName: 'KW' },
+        { id: 'lx-tx', source: 'tx', displayName: 'QQ', shortName: 'QQ' },
+    ];
+
+    // Folia quality → 内部 quality
+    const qualityMap = {
+        standard: '128k',
+        high: '320k',
+        lossless: 'flac',
+        hires: 'flac24bit',
+    };
+
+    const omniProviders = folium.experimental['omni.providers'];
+
+    for (const platform of platforms) {
         try {
-            const readValue = value => {
-                if (typeof value === 'string') return value.trim();
-                if (Array.isArray(value)) return readValue(value[0]);
-                if (value && typeof value === 'object') return readValue(value.value ?? value.url ?? value.scriptUrl ?? value.input);
-                return '';
-            };
-            const syncSettings = async () => {
-                const url = readValue(section.params.get('script-url'));
-                const quality = readValue(section.params.get('quality')) || '320k';
-                await folium.rpc.call('setConfig', { scriptUrl: url, quality });
-                if (url) {
-                    const result = await folium.rpc.call('loadScript', { url });
-                    log.info(result.success ? '脚本加载成功' : '脚本加载失败: ' + result.error);
-                }
-            };
-            if (typeof section.params.subscribe === 'function') {
-                section.params.subscribe(syncSettings);
-            }
+            omniProviders.register({
+                id: platform.id,
+                displayName: platform.displayName,
+                shortName: platform.shortName,
+
+                // 搜索
+                async search(query, { limit, offset }) {
+                    const result = await folium.rpc.call(
+                        'searchPlatform', platform.source, query, limit, offset
+                    );
+                    if (!result.success) {
+                        log.warn(platform.displayName + ' 搜索失败: ' + result.error);
+                        return { items: [], hasMore: false };
+                    }
+                    const items = (result.items || []).map(s => ({
+                        id: String(s.id),
+                        title: s.title || '',
+                        artists: s.artists || [],
+                        album: s.album || '',
+                        coverUrl: s.coverUrl || '',
+                        durationMs: s.durationMs || 0,
+                    }));
+                    return { items, hasMore: items.length >= limit };
+                },
+
+                // 播放
+                async getAudioUrl(song, quality) {
+                    const songId = String(song?.id ?? '');
+                    if (!songId) throw new Error('歌曲 ID 为空');
+                    const q = qualityMap[quality] || quality || '320k';
+                    const musicInfo = {
+                        source: platform.source,
+                        id: songId,
+                        name: song.title || '',
+                        singer: (song.artists || []).join(' '),
+                    };
+
+                    const result = await folium.rpc.call(
+                        'getAudioUrl', platform.source, songId, q, musicInfo
+                    );
+                    if (result?.success && result.url) return { url: result.url };
+
+                    // 降级音质
+                    for (const fq of ['flac', '320k', '128k']) {
+                        if (fq === q) continue;
+                        try {
+                            const r2 = await folium.rpc.call(
+                                'getAudioUrl', platform.source, songId, fq, musicInfo
+                            );
+                            if (r2?.success && r2.url) return { url: r2.url };
+                        } catch (_) {}
+                    }
+                    throw new Error(result?.error || '无法获取播放链接');
+                },
+
+                // 歌词
+                async getLyrics(song) {
+                    const songId = String(song?.id || '');
+                    if (!songId) return null;
+                    try {
+                        const result = await folium.rpc.call(
+                            'getLyrics', platform.source, songId
+                        );
+                        return result?.success ? result.lyrics : null;
+                    } catch (_) { return null; }
+                },
+            });
+            log.info('已注册音源: ' + platform.displayName);
         } catch (e) {
-            log.warn('设置监听: ' + e.message);
+            log.error(platform.displayName + ' 注册失败: ' + e.message);
         }
     }
 
-    // -------- 注册为 omni.providers --------
-    try {
-        const omniProviders = folium.experimental['omni.providers'];
-        omniProviders.register({
-            id: 'lx-music',
-            displayName: 'LX Music',
-            shortName: 'LX',
-
-            // 搜索歌曲
-            async search(query, { limit, offset }) {
-                const result = await folium.rpc.call('search', { keyword: query, limit, offset });
-                if (!result.success) {
-                    log.warn('搜索失败: ' + result.error);
-                    return { items: [], hasMore: false };
-                }
-                const items = (result.items || []).map(s => ({
-                    id: `${s.source}:${s.id}`,
-                    title: s.title || '',
-                    artists: s.artists || [],
-                    album: s.album || '',
-                    album: s.album || '',
-                    coverUrl: s.coverUrl || '',
-                    durationMs: s.durationMs || 0,
-                }));
-                return { items, hasMore: items.length >= limit };
-            },
-
-            // 获取音频 URL
-            async getAudioUrl(song, quality) {
-                const mediaId = String(song?.id ?? '');
-                // Folia 可能传入 source:id，也可能只传 id；优先使用搜索结果携带的平台信息。
-                const parts = mediaId.split(':');
-                const source = ['wy', 'kg', 'kw', 'tx', 'mg'].includes(parts[0])
-                    ? parts[0]
-                    : (song?.source || 'wy');
-                const songId = ['wy', 'kg', 'kw', 'tx', 'mg'].includes(parts[0])
-                    ? parts.slice(1).join(':')
-                    : mediaId;
-                if (!songId) throw new Error('歌曲 ID 为空');
-
-                // 映射 Folia quality → LX quality
-                const qualityMap = {
-                    standard: '128k',
-                    high: '320k',
-                    lossless: 'flac',
-                    hires: 'flac24bit',
-                };
-                const q = qualityMap[quality] || quality || '320k';
-
-                const musicInfo = {
-                    source,
-                    songmid: songId,
-                    id: songId,
-                    name: song.title || '',
-                    singer: (song.artists || []).join(' '),
-                };
-
-                const result = await folium.rpc.call('getAudioUrl', {
-                    source, songId, quality: q, musicInfo,
-                });
-
-                if (result?.success && result.url) {
-                    return { url: result.url };
-                }
-
-                // 尝试降级音质
-                const fallbacks = ['flac', '320k', '128k'];
-                for (const fq of fallbacks) {
-                    if (fq === q) continue;
-                    try {
-                        const r2 = await folium.rpc.call('getAudioUrl', {
-                            source, songId, quality: fq, musicInfo,
-                        });
-                        if (r2?.success && r2.url) return { url: r2.url };
-                    } catch (_) {}
-                }
-
-                throw new Error(result?.error || '无法获取播放链接');
-            },
-        });
-        log.info('已注册为 omni.providers: LX Music');
-    } catch (e) {
-        log.error('omni.providers 注册失败: ' + e.message);
-    }
-
-    log.info('LX Music Provider 初始化完成');
+    log.info('在线音源 Provider 初始化完成');
 }
