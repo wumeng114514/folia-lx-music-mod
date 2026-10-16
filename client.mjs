@@ -9,20 +9,8 @@ export default async function activate(folium) {
     const settingsSection = folium.registries.settingsSections.register({
         id: 'lx-music-settings',
         label: { 'zh-CN': '在线音源设置', en: 'Online Source Settings' },
-        description: { 'zh-CN': '在线音源播放质量设置', en: 'Online source playback quality settings' },
+        description: { 'zh-CN': '在线音源设置', en: 'Online source settings' },
         settings: [
-            {
-                key: 'quality',
-                type: 'select',
-                label: { 'zh-CN': '音质', en: 'Quality' },
-                options: [
-                    { value: '128k', label: '128k' },
-                    { value: '320k', label: '320k' },
-                    { value: 'flac', label: 'FLAC' },
-                    { value: 'flac24bit', label: 'Hi-Res' },
-                ],
-                defaultValue: '320k',
-            },
             {
                 key: 'oiapi-key',
                 type: 'text',

@@ -2,7 +2,7 @@
   "folium": 1,
   "id": "folia-lx-music-mod",
   "name": "Online Music Source",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "author": "wumeng114514",
   "contributors": ["Claude AI"],
   "description": "在线音源适配器，支持多平台搜索和播放",

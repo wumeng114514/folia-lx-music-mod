@@ -212,9 +212,6 @@ module.exports = function activate(api) {
         return data?.lyric || null;
     }
 
-    // KW 歌词 — oiapi 返回的 message 里有时包含歌词信息，但没有独立歌词 API
-    // 暂不支持
-
     // ======== 播放URL获取 ========
     const QUALITY_TO_BR = { '128k': 7, '320k': 5, 'flac': 4, 'flac24bit': 3 };
 
