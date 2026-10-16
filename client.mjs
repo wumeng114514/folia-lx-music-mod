@@ -6,7 +6,7 @@ export default async function activate(folium) {
     log.info('在线音源 Provider 初始化中...');
 
     // -------- 注册设置 --------
-    folium.registries.settingsSections.register({
+    const settingsSection = folium.registries.settingsSections.register({
         id: 'lx-music-settings',
         label: { 'zh-CN': '在线音源设置', en: 'Online Source Settings' },
         description: { 'zh-CN': '在线音源播放质量设置', en: 'Online source playback quality settings' },
@@ -22,6 +22,13 @@ export default async function activate(folium) {
                     { value: 'flac24bit', label: 'Hi-Res' },
                 ],
                 defaultValue: '320k',
+            },
+            {
+                key: 'oiapi-key',
+                type: 'text',
+                label: { 'zh-CN': 'OIAPI 密钥', en: 'OIAPI key' },
+                description: { 'zh-CN': '用于获取 QQ 播放链接；请填写你自己申请的密钥。', en: 'Use your own OIAPI key for QQ playback.' },
+                defaultValue: '',
             },
         ],
     });
@@ -75,6 +82,10 @@ export default async function activate(folium) {
                     const songId = String(song?.id ?? '');
                     if (!songId) throw new Error('歌曲 ID 为空');
                     const q = qualityMap[quality] || quality || '320k';
+                    const settings = settingsSection.params.get();
+                    const oiapiKey = typeof settings?.['oiapi-key'] === 'string'
+                        ? settings['oiapi-key'].trim()
+                        : '';
                     const musicInfo = {
                         source: platform.source,
                         id: songId,
@@ -83,7 +94,7 @@ export default async function activate(folium) {
                     };
 
                     const result = await folium.rpc.call(
-                        'getAudioUrl', platform.source, songId, q, musicInfo
+                        'getAudioUrl', platform.source, songId, q, { ...musicInfo, oiapiKey }
                     );
                     if (result?.success && result.url) return { url: result.url };
 
@@ -92,7 +103,7 @@ export default async function activate(folium) {
                         if (fq === q) continue;
                         try {
                             const r2 = await folium.rpc.call(
-                                'getAudioUrl', platform.source, songId, fq, musicInfo
+                                'getAudioUrl', platform.source, songId, fq, { ...musicInfo, oiapiKey }
                             );
                             if (r2?.success && r2.url) return { url: r2.url };
                         } catch (_) {}

@@ -33,7 +33,7 @@
 - `music.163.com` — WY 搜索/详情/歌词
 - `c.y.qq.com` / `y.qq.com` — QQ 搜索/封面/歌词
 - `search.kuwo.cn` / `img1.kuwo.cn` — KW 搜索/封面
-- `oiapi.net` — 播放URL获取
+- `oiapi.net` — 播放URL获取（QQ 播放需要用户填写自己申请的 OIAPI 密钥）
 - `p1.music.126.net` / `p2.music.126.net` — WY 封面CDN
 
 **本模组不下载或执行任何远程代码。** 所有播放逻辑内置在模组代码中。
@@ -46,6 +46,8 @@
 
 本模组仅供学习和技术研究使用。使用者需自行承担相关法律责任。
 
+播放地址来自第三方解析接口，可能随时失效；本模组不保证第三方服务的可用性。
+
 ## 许可证
 
-wumeng License
+MIT License

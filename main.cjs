@@ -48,12 +48,33 @@ module.exports = function activate(api) {
                 timeout: REQUEST_TIMEOUT_MS,
             };
 
+            let settled = false;
+            let cancelRequest = () => { try { req.destroy(); } catch (_) {} };
+            const cleanup = () => {
+                const index = abortControllers.indexOf(cancelRequest);
+                if (index >= 0) abortControllers.splice(index, 1);
+            };
+            const fail = (error) => {
+                if (settled) return;
+                settled = true;
+                cleanup();
+                reject(error);
+            };
+            const succeed = (value) => {
+                if (settled) return;
+                settled = true;
+                cleanup();
+                resolve(value);
+            };
             const req = https.request(url, reqOptions, (res) => {
                 if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-                    if (redirectCount >= MAX_REDIRECTS) {
-                        return reject(new Error('超过最大重定向次数'));
+                    if (redirectCount >= MAX_REDIRECTS) return fail(new Error('超过最大重定向次数'));
+                    try {
+                        const nextUrl = new URL(res.headers.location, url).toString();
+                        return safeRequest(nextUrl, { method: 'GET' }, redirectCount + 1).then(succeed, fail);
+                    } catch (error) {
+                        return fail(error);
                     }
-                    return safeRequest(res.headers.location, { method: 'GET' }, redirectCount + 1).then(resolve, reject);
                 }
 
                 const chunks = [];
@@ -62,23 +83,20 @@ module.exports = function activate(api) {
                     totalBytes += chunk.length;
                     if (totalBytes > MAX_RESPONSE_BYTES) {
                         res.destroy();
-                        reject(new Error('响应超过 5MB 限制'));
+                        fail(new Error('响应超过 5MB 限制'));
                         return;
                     }
                     chunks.push(chunk);
                 });
-                res.on('end', () => {
-                    resolve({ statusCode: res.statusCode, body: Buffer.concat(chunks).toString('utf-8') });
-                });
-                res.on('error', reject);
+                res.on('end', () => succeed({ statusCode: res.statusCode, body: Buffer.concat(chunks).toString('utf-8') }));
+                res.on('error', fail);
             });
-            req.on('error', reject);
-            req.on('timeout', () => { req.destroy(); reject(new Error('请求超时')); });
-            if (options.body) {
-                req.write(typeof options.body === 'string' ? options.body : JSON.stringify(options.body));
-            }
+            cancelRequest = () => { try { req.destroy(); } catch (_) {} };
+            abortControllers.push(cancelRequest);
+            req.on('error', fail);
+            req.on('timeout', () => { req.destroy(); fail(new Error('请求超时')); });
+            if (options.body) req.write(typeof options.body === 'string' ? options.body : JSON.stringify(options.body));
             req.end();
-            abortControllers.push(() => { try { req.destroy(); } catch (_) {} });
         });
     }
 
@@ -214,7 +232,9 @@ module.exports = function activate(api) {
                 url = `https://oiapi.net/api/Kuwo?msg=${encodeURIComponent(name + ' ' + singer)}&n=1&br=${br}`;
                 break;
             case 'tx':
-                url = `https://oiapi.net/api/QQ_Music?key=oiapi-ef6133b7-ac2f-dc7d-878c-d3e207a82575&type=json&br=${br}&n=1&mid=${encodeURIComponent(songId)}`;
+                const oiapiKey = typeof musicInfo?.oiapiKey === 'string' ? musicInfo.oiapiKey.trim() : '';
+                if (!oiapiKey) throw new Error('请先在模组设置中填写你自己申请的 OIAPI 密钥');
+                url = `https://oiapi.net/api/QQ_Music?key=${encodeURIComponent(oiapiKey)}&type=json&br=${br}&n=1&mid=${encodeURIComponent(songId)}`;
                 break;
             default:
                 throw new Error('不支持的平台: ' + source);

@@ -1,7 +1,13 @@
 # 权限说明
 
-## filesystem.data
-用于通过 `api.storage.data` 持久化用户设置（音质偏好）。
+## permissions
+
+无。模组不声明任何运行时权限；音质和 OIAPI 密钥使用 Folia 的设置面板保存，不调用 `api.storage`。
+
+## experimental
+
+### omni.providers
+用于在 Folia 搜索栏中注册 WY、KW、QQ 三个独立音源，提供搜索、播放、封面和歌词能力。
 
 ## 网络请求说明
 本模组在主进程中使用 Node.js `https` 模块发起网络请求（主进程 modApi 不提供 `net.fetch`）。
