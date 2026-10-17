@@ -12,6 +12,18 @@ export default async function activate(folium) {
         description: { 'zh-CN': '在线音源设置', en: 'Online source settings' },
         settings: [
             {
+                key: 'quality',
+                type: 'select',
+                label: { 'zh-CN': '音质', en: 'Quality' },
+                options: [
+                    { value: '128k', label: '128k' },
+                    { value: '320k', label: '320k' },
+                    { value: 'flac', label: 'FLAC' },
+                    { value: 'flac24bit', label: 'Hi-Res' },
+                ],
+                defaultValue: '320k',
+            },
+            {
                 key: 'oiapi-key',
                 type: 'text',
                 label: { 'zh-CN': 'OIAPI 密钥', en: 'OIAPI key' },
@@ -69,8 +81,11 @@ export default async function activate(folium) {
                 async getAudioUrl(song, quality) {
                     const songId = String(song?.id ?? '');
                     if (!songId) throw new Error('歌曲 ID 为空');
-                    const q = qualityMap[quality] || quality || '320k';
                     const settings = settingsSection.params.get();
+                    const preferredQuality = typeof settings?.['quality'] === 'string'
+                        ? settings['quality']
+                        : '320k';
+                    const q = preferredQuality || qualityMap[quality] || quality || '320k';
                     const oiapiKey = typeof settings?.['oiapi-key'] === 'string'
                         ? settings['oiapi-key'].trim()
                         : '';
