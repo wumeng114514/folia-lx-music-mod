@@ -16,12 +16,13 @@ export default async function activate(folium) {
                 type: 'select',
                 label: { 'zh-CN': '音质', en: 'Quality' },
                 options: [
+                    { value: 'auto', label: '跟随 Folia' },
                     { value: '128k', label: '128k' },
                     { value: '320k', label: '320k' },
                     { value: 'flac', label: 'FLAC' },
                     { value: 'flac24bit', label: 'Hi-Res' },
                 ],
-                defaultValue: '320k',
+                defaultValue: 'auto',
             },
             {
                 key: 'oiapi-key',
@@ -84,8 +85,10 @@ export default async function activate(folium) {
                     const settings = settingsSection.params.get();
                     const preferredQuality = typeof settings?.['quality'] === 'string'
                         ? settings['quality']
-                        : '320k';
-                    const q = preferredQuality || qualityMap[quality] || quality || '320k';
+                        : 'auto';
+                    const q = (preferredQuality && preferredQuality !== 'auto')
+                        ? preferredQuality
+                        : (qualityMap[quality] || quality || '320k');
                     const oiapiKey = typeof settings?.['oiapi-key'] === 'string'
                         ? settings['oiapi-key'].trim()
                         : '';
